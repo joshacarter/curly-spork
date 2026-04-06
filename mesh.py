@@ -70,6 +70,25 @@ class Mesh:
     def copy(self) -> "Mesh":
         return Mesh(list(self.vertices), list(self.triangles))
 
+    def bbox(self):
+        """Return ((min_x, min_y, min_z), (max_x, max_y, max_z))."""
+        if not self.vertices:
+            return ((0, 0, 0), (0, 0, 0))
+        xs = [v[0] for v in self.vertices]
+        ys = [v[1] for v in self.vertices]
+        zs = [v[2] for v in self.vertices]
+        return ((min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs)))
+
+    def center_xy(self) -> "Mesh":
+        """Center the mesh at the XY origin."""
+        if not self.vertices:
+            return self
+        (mn_x, mn_y, _), (mx_x, mx_y, _) = self.bbox()
+        cx = (mn_x + mx_x) / 2
+        cy = (mn_y + mx_y) / 2
+        self.translate(-cx, -cy, 0)
+        return self
+
     def place_on_ground(self) -> "Mesh":
         """Shift so the lowest Z vertex sits at z=0."""
         if self.vertices:

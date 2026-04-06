@@ -147,6 +147,9 @@ def write_3mf(mesh: Mesh, filename: str, palette=None):
 
     title = os.path.splitext(filename)[0]
 
+    # Center mesh on XY origin
+    mesh = mesh.copy().place_on_ground().center_xy()
+
     # Split mesh into per-color sub-meshes
     color_meshes = _split_mesh_by_color(mesh)
 
@@ -243,11 +246,65 @@ def write_3mf(mesh: Mesh, filename: str, palette=None):
     print(f"    {total_v:,} verts, {total_t:,} tris, {len(color_meshes)} volumes | {colors}")
 
 
+def _layout_pieces(pieces: dict, gap: float = 10.0,
+                    max_width: float = 240.0) -> list:
+    """Lay out pieces in rows that fit within max_width, centered at origin.
+
+    Returns [(piece_name, mesh, tx, ty)] with translation offsets.
+    """
+    items = []
+    for name, mesh in pieces.items():
+        m = mesh.copy().place_on_ground().center_xy()
+        (mn_x, mn_y, _), (mx_x, mx_y, _) = m.bbox()
+        w = mx_x - mn_x
+        d = mx_y - mn_y
+        items.append((name, m, w, d))
+
+    # Build rows that fit within max_width
+    rows = []
+    current_row = []
+    row_width = 0
+    for item in items:
+        name, m, w, d = item
+        needed = w + (gap if current_row else 0)
+        if current_row and row_width + needed > max_width:
+            rows.append(current_row)
+            current_row = [item]
+            row_width = w
+        else:
+            current_row.append(item)
+            row_width += needed
+    if current_row:
+        rows.append(current_row)
+
+    # Calculate total height of all rows
+    row_heights = [max(d for _, _, _, d in row) for row in rows]
+    total_height = sum(row_heights) + gap * (len(rows) - 1)
+
+    result = []
+    cursor_y = total_height / 2
+
+    for row, row_h in zip(rows, row_heights):
+        row_w = sum(w for _, _, w, _ in row) + gap * (len(row) - 1)
+        cursor_x = -row_w / 2
+        cy = cursor_y - row_h / 2
+
+        for name, m, w, d in row:
+            tx = cursor_x + w / 2
+            result.append((name, m, tx, cy))
+            cursor_x += w + gap
+
+        cursor_y -= row_h + gap
+
+    return result
+
+
 def write_3mf_multi(plates: dict, filename: str, palette=None):
     """Write multiple plates into a single 3MF.
 
     plates: { plate_name: { piece_name: Mesh, ... }, ... }
     Each plate_name becomes a separate plate in Bambu Studio.
+    Objects are laid out with spacing and centered on each plate.
     """
     if palette is None:
         palette = AMS_PALETTE
@@ -262,9 +319,11 @@ def write_3mf_multi(plates: dict, filename: str, palette=None):
     for plate_idx, (plate_name, pieces) in enumerate(plates.items(), 1):
         plate_instances = ""
 
-        for piece_name, mesh in pieces.items():
-            m = mesh.copy().place_on_ground()
-            color_meshes = _split_mesh_by_color(m)
+        # Lay out pieces with spacing, centered at origin
+        layout = _layout_pieces(pieces)
+
+        for piece_name, mesh, tx, ty in layout:
+            color_meshes = _split_mesh_by_color(mesh)
 
             # Sub-objects (volumes)
             volume_ids = {}
@@ -294,7 +353,10 @@ def write_3mf_multi(plates: dict, filename: str, palette=None):
       </components>
     </object>"""
 
-            build_items_xml += f'\n    <item objectid="{parent_id}" p:UUID="build-{parent_id}" />'
+            # Position via transform on the build item (3x4 affine matrix)
+            # [1 0 0 tx  0 1 0 ty  0 0 1 0] = translate by (tx, ty, 0)
+            transform = f"{1} {0} {0} {0} {1} {0} {0} {0} {1} {tx:.4f} {ty:.4f} {0}"
+            build_items_xml += f'\n    <item objectid="{parent_id}" p:UUID="build-{parent_id}" transform="{transform}" />'
 
             # Config: parent with per-volume extruder
             parts_xml = ""
