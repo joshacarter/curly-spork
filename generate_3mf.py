@@ -1012,26 +1012,29 @@ def main():
         print("\nAvailable scenes:")
         for name, info in SCENES.items():
             print(f"  {name:25s} {info['desc']}")
-        print(f"\n  {'all':25s} Everything in one file — each scene gets its own plate")
+        print(f"\n  {'all':25s} Generate all scenes (one .3mf per scene)")
         print(f"\nUsage: python3 {sys.argv[0]} <scene> [--split]")
         print("  --split : export each piece as a separate .3mf file")
-        print(f"  python3 {sys.argv[0]} all  : single file, multiple plates")
+        print(f"  python3 {sys.argv[0]} all  : one file per scene")
         sys.exit(0)
 
     scene_name = sys.argv[1]
     split_mode = "--split" in sys.argv
 
-    # --- ALL mode: one file, each scene on its own plate ---
+    # --- ALL mode: one .3mf per scene, pieces laid out and centered ---
     if scene_name == "all":
-        print("\nBuilding ALL scenes — each on its own plate...")
-        plates = {}
+        print("\nBuilding ALL scenes — one .3mf per scene...")
         for name, info in SCENES.items():
-            print(f"  Plate: {name} — {info['desc']}")
+            print(f"\n  {name}: {info['desc']}")
             pieces = info["fn"]()
-            plates[name] = pieces
-        print(f"\nExporting:")
-        write_3mf_multi(plates, "gnome_bar_all.3mf")
-        print("\nDone! One file, multiple plates — open in Bambu Studio.")
+            layout = _layout_pieces(pieces)
+            combined = Mesh()
+            for _, m, tx, ty in layout:
+                m.translate(tx, ty, 0)
+                combined.merge(m)
+            combined.place_on_ground()
+            write_3mf(combined, f"{name}.3mf")
+        print("\nDone! Open each .3mf in Bambu Studio.")
         return
 
     if scene_name not in SCENES:
@@ -1049,10 +1052,12 @@ def main():
             m = mesh.copy().place_on_ground()
             write_3mf(m, f"{scene_name}_{piece_name}.3mf")
     else:
-        print(f"\nExporting as single combined file ({len(pieces)} pieces):")
+        print(f"\nExporting combined ({len(pieces)} pieces, laid out):")
+        layout = _layout_pieces(pieces)
         combined = Mesh()
-        for mesh in pieces.values():
-            combined.merge(mesh)
+        for _, m, tx, ty in layout:
+            m.translate(tx, ty, 0)
+            combined.merge(m)
         combined.place_on_ground()
         write_3mf(combined, f"{scene_name}.3mf")
 
