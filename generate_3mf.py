@@ -243,10 +243,11 @@ def write_3mf(mesh: Mesh, filename: str, palette=None):
     print(f"    {total_v:,} verts, {total_t:,} tris, {len(color_meshes)} volumes | {colors}")
 
 
-def write_3mf_multi(pieces_by_plate: dict, filename: str, palette=None):
-    """Write multiple named pieces into a single 3MF, all on one plate.
+def write_3mf_multi(plates: dict, filename: str, palette=None):
+    """Write multiple plates into a single 3MF.
 
-    Each piece becomes a parent object with per-color volumes.
+    plates: { plate_name: { piece_name: Mesh, ... }, ... }
+    Each plate_name becomes a separate plate in Bambu Studio.
     """
     if palette is None:
         palette = AMS_PALETTE
@@ -256,63 +257,73 @@ def write_3mf_multi(pieces_by_plate: dict, filename: str, palette=None):
     objects_xml = ""
     build_items_xml = ""
     model_settings_objects = ""
-    plate_instances = ""
+    plate_configs = ""
 
-    for piece_name, mesh in pieces_by_plate.items():
-        m = mesh.copy().place_on_ground()
-        color_meshes = _split_mesh_by_color(m)
+    for plate_idx, (plate_name, pieces) in enumerate(plates.items(), 1):
+        plate_instances = ""
 
-        # Sub-objects (volumes)
-        volume_ids = {}
-        for color, submesh in color_meshes.items():
-            vid = next_id
-            volume_ids[color] = vid
-            next_id += 1
-            mesh_xml = _mesh_to_xml(submesh)
-            objects_xml += f"""
+        for piece_name, mesh in pieces.items():
+            m = mesh.copy().place_on_ground()
+            color_meshes = _split_mesh_by_color(m)
+
+            # Sub-objects (volumes)
+            volume_ids = {}
+            for color, submesh in color_meshes.items():
+                vid = next_id
+                volume_ids[color] = vid
+                next_id += 1
+                mesh_xml = _mesh_to_xml(submesh)
+                objects_xml += f"""
     <object id="{vid}" type="model" p:UUID="volume-{vid}">
       <mesh>
 {mesh_xml}
       </mesh>
     </object>"""
 
-        # Parent object
-        parent_id = next_id
-        next_id += 1
-        components = "\n".join(
-            f'        <component objectid="{vid}" />'
-            for vid in volume_ids.values()
-        )
-        objects_xml += f"""
+            # Parent object
+            parent_id = next_id
+            next_id += 1
+            components = "\n".join(
+                f'        <component objectid="{vid}" />'
+                for vid in volume_ids.values()
+            )
+            objects_xml += f"""
     <object id="{parent_id}" type="model" p:UUID="parent-{parent_id}">
       <components>
 {components}
       </components>
     </object>"""
 
-        build_items_xml += f'\n    <item objectid="{parent_id}" p:UUID="build-{parent_id}" />'
+            build_items_xml += f'\n    <item objectid="{parent_id}" p:UUID="build-{parent_id}" />'
 
-        # Config: parent with per-volume extruder
-        parts_xml = ""
-        for color, vid in volume_ids.items():
-            cname = palette[color][1] if color < len(palette) else f"Color{color}"
-            parts_xml += f"""
+            # Config: parent with per-volume extruder
+            parts_xml = ""
+            for color, vid in volume_ids.items():
+                cname = palette[color][1] if color < len(palette) else f"Color{color}"
+                parts_xml += f"""
     <part id="{vid}" subtype="ModelPart">
       <metadata key="name" value="{cname}" />
       <metadata key="extruder" value="{color + 1}" />
     </part>"""
 
-        model_settings_objects += f"""
+            model_settings_objects += f"""
   <object id="{parent_id}">
     <metadata key="name" value="{piece_name}" />
     <metadata key="extruder" value="1" />{parts_xml}
   </object>"""
 
-        plate_instances += f"""
+            plate_instances += f"""
     <model_instance>
       <metadata key="object_id" value="{parent_id}" />
       <metadata key="instance_id" value="0" />
     </model_instance>"""
+
+        plate_configs += f"""
+  <plate>
+    <metadata key="plater_id" value="{plate_idx}" />
+    <metadata key="plater_name" value="{plate_name}" />
+    <metadata key="locked" value="false" />{plate_instances}
+  </plate>"""
 
     model_xml = f"""\
 <?xml version="1.0" encoding="UTF-8"?>
@@ -335,12 +346,7 @@ def write_3mf_multi(pieces_by_plate: dict, filename: str, palette=None):
 
     model_settings = f"""\
 <?xml version="1.0" encoding="UTF-8"?>
-<config>{model_settings_objects}
-  <plate>
-    <metadata key="plater_id" value="1" />
-    <metadata key="plater_name" value="" />
-    <metadata key="locked" value="false" />{plate_instances}
-  </plate>
+<config>{model_settings_objects}{plate_configs}
 </config>
 """
 
@@ -348,11 +354,11 @@ def write_3mf_multi(pieces_by_plate: dict, filename: str, palette=None):
         model_xml, model_settings, _project_settings_json(palette),
         filename, palette)
 
-    total_pieces = len(pieces_by_plate)
-    total_v = sum(len(m.vertices) for m in pieces_by_plate.values())
-    total_t = sum(len(m.triangles) for m in pieces_by_plate.values())
+    total_pieces = sum(len(p) for p in plates.values())
+    total_v = sum(len(m.vertices) for p in plates.values() for m in p.values())
+    total_t = sum(len(m.triangles) for p in plates.values() for m in p.values())
     print(f"  {filepath}")
-    print(f"    {total_pieces} objects on 1 plate")
+    print(f"    {total_pieces} objects across {len(plates)} plates")
     print(f"    {total_v:,} verts, {total_t:,} tris | all 4 AMS colors")
 
 
@@ -953,7 +959,7 @@ def main():
         print("\nAvailable scenes:")
         for name, info in SCENES.items():
             print(f"  {name:25s} {info['desc']}")
-        print(f"\n  {'all':25s} Everything in one file, each scene on its own plate")
+        print(f"\n  {'all':25s} Everything in one file — each scene gets its own plate")
         print(f"\nUsage: python3 {sys.argv[0]} <scene> [--split]")
         print("  --split : export each piece as a separate .3mf file")
         print(f"  python3 {sys.argv[0]} all  : single file, multiple plates")
@@ -962,18 +968,17 @@ def main():
     scene_name = sys.argv[1]
     split_mode = "--split" in sys.argv
 
-    # --- ALL mode: one file, all pieces on one plate ---
+    # --- ALL mode: one file, each scene on its own plate ---
     if scene_name == "all":
-        print("\nBuilding ALL scenes into one 3MF (single plate)...")
-        all_pieces = {}
+        print("\nBuilding ALL scenes — each on its own plate...")
+        plates = {}
         for name, info in SCENES.items():
-            print(f"  Scene: {name} — {info['desc']}")
+            print(f"  Plate: {name} — {info['desc']}")
             pieces = info["fn"]()
-            for pname, mesh in pieces.items():
-                all_pieces[f"{name}__{pname}"] = mesh
+            plates[name] = pieces
         print(f"\nExporting:")
-        write_3mf_multi(all_pieces, "gnome_bar_all.3mf")
-        print("\nDone! One file — open in Bambu Studio.")
+        write_3mf_multi(plates, "gnome_bar_all.3mf")
+        print("\nDone! One file, multiple plates — open in Bambu Studio.")
         return
 
     if scene_name not in SCENES:
