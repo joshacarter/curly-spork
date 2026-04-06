@@ -165,6 +165,156 @@ def write_3mf(mesh: Mesh, filename: str, palette=None):
     print(f"    {len(vertices):,} verts, {len(triangles):,} tris | {colors}")
 
 
+def write_3mf_multi(pieces_by_plate: dict, filename: str, palette=None):
+    """Write multiple objects across multiple plates into a single 3MF.
+
+    pieces_by_plate: { plate_name: { piece_name: Mesh, ... }, ... }
+    Each plate_name becomes a plate in Bambu Studio.
+    """
+    if palette is None:
+        palette = AMS_PALETTE
+
+    title = os.path.splitext(filename)[0]
+
+    mat_lines = "\n".join(
+        f'        <base name="{name}" displaycolor="#{hexc}" />'
+        for hexc, name in palette
+    )
+
+    # Assign object IDs starting at 2 (1 is basematerials)
+    obj_id = 2
+    objects_xml = ""
+    build_items_xml = ""
+    model_settings_objects = ""
+    plate_configs = ""
+
+    for plate_idx, (plate_name, pieces) in enumerate(pieces_by_plate.items(), 1):
+        plate_instances = ""
+        for piece_name, mesh in pieces.items():
+            m = mesh.copy().place_on_ground()
+            verts = m.vertices
+            tris = m.triangles
+
+            vert_xml = "\n".join(
+                f'          <vertex x="{v[0]:.4f}" y="{v[1]:.4f}" z="{v[2]:.4f}" />'
+                for v in verts
+            )
+            tri_xml = "\n".join(
+                f'          <triangle v1="{t[0]}" v2="{t[1]}" v3="{t[2]}" pid="1" p1="{t[3]}" />'
+                for t in tris
+            )
+
+            objects_xml += f"""
+    <object id="{obj_id}" type="model" p:UUID="object-{obj_id}">
+      <mesh>
+        <vertices>
+{vert_xml}
+        </vertices>
+        <triangles>
+{tri_xml}
+        </triangles>
+      </mesh>
+    </object>"""
+
+            build_items_xml += f'\n    <item objectid="{obj_id}" p:UUID="build-item-{obj_id}" />'
+
+            model_settings_objects += f"""
+  <object id="{obj_id}">
+    <metadata key="name" value="{piece_name}" />
+    <metadata key="extruder" value="1" />
+  </object>"""
+
+            plate_instances += f'\n    <instance object_id="{obj_id}" instance_id="0" />'
+            obj_id += 1
+
+        plate_configs += f"""
+  <plate>
+    <metadata key="plater_id" value="{plate_idx}" />
+    <metadata key="plater_name" value="{plate_name}" />
+    <metadata key="locked" value="false" />{plate_instances}
+  </plate>"""
+
+    model_xml = f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter"
+       xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
+       xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02"
+       xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06"
+       xmlns:slic3rpe="http://schemas.slic3r.org/3mf/2017/06"
+       xmlns:BambuStudio="http://schemas.bambulab.com/package/2021">
+  <metadata name="Application">BambuStudio</metadata>
+  <metadata name="BambuStudio:3mfVersion">1</metadata>
+  <metadata name="slic3rpe:Version3mf">1</metadata>
+  <metadata name="Title">{title}</metadata>
+  <metadata name="Designer">3MF Generator</metadata>
+  <resources>
+    <basematerials id="1">
+{mat_lines}
+    </basematerials>{objects_xml}
+  </resources>
+  <build>{build_items_xml}
+  </build>
+</model>
+"""
+
+    filament_configs = ""
+    for idx in range(len(palette)):
+        filament_configs += f"""
+    <filament id="{idx + 1}" name="{palette[idx][1]}" color="#{palette[idx][0]}" type="PLA" />"""
+
+    model_settings = f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<config>{model_settings_objects}{plate_configs}
+</config>
+"""
+
+    project_settings = f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <header>
+    <printer>Bambu Lab A1 0.4 nozzle</printer>
+  </header>{filament_configs}
+</config>
+"""
+
+    content_types = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml" />
+  <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml" />
+  <Default Extension="config" ContentType="text/xml" />
+</Types>
+"""
+    rels = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Target="/3D/3dmodel.model" Id="rel0"
+                Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel" />
+</Relationships>
+"""
+
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("_rels/.rels", rels)
+        zf.writestr("3D/3dmodel.model", model_xml)
+        zf.writestr("Metadata/model_settings.config", model_settings)
+        zf.writestr("Metadata/project_settings.config", project_settings)
+
+    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+    os.makedirs(output_dir, exist_ok=True)
+    filepath = os.path.join(output_dir, filename)
+    with open(filepath, "wb") as f:
+        f.write(buf.getvalue())
+
+    total_v = sum(len(m.vertices) for ps in pieces_by_plate.values() for m in ps.values())
+    total_t = sum(len(m.triangles) for ps in pieces_by_plate.values() for m in ps.values())
+    total_pieces = sum(len(ps) for ps in pieces_by_plate.values())
+    print(f"  {filepath}")
+    print(f"    {total_pieces} objects across {len(pieces_by_plate)} plates")
+    print(f"    {total_v:,} verts, {total_t:,} tris | all 4 AMS colors")
+
+
 # ============================================================================
 # SCENE BUILDERS — each function returns a dict of named Mesh pieces
 # ============================================================================
@@ -733,16 +883,31 @@ def main():
         print("\nAvailable scenes:")
         for name, info in SCENES.items():
             print(f"  {name:25s} {info['desc']}")
+        print(f"\n  {'all':25s} Everything in one file, each scene on its own plate")
         print(f"\nUsage: python3 {sys.argv[0]} <scene> [--split]")
         print("  --split : export each piece as a separate .3mf file")
+        print(f"  python3 {sys.argv[0]} all  : single file, multiple plates")
         sys.exit(0)
 
     scene_name = sys.argv[1]
     split_mode = "--split" in sys.argv
 
+    # --- ALL mode: one file, every scene on its own plate ---
+    if scene_name == "all":
+        print("\nBuilding ALL scenes into one multi-plate 3MF...")
+        plates = {}
+        for name, info in SCENES.items():
+            print(f"  Plate: {name} — {info['desc']}")
+            pieces = info["fn"]()
+            plates[name] = pieces
+        print(f"\nExporting:")
+        write_3mf_multi(plates, "gnome_bar_all.3mf")
+        print("\nDone! One file, multiple plates — open in Bambu Studio.")
+        return
+
     if scene_name not in SCENES:
         print(f"\nUnknown scene: '{scene_name}'")
-        print(f"Available: {', '.join(SCENES.keys())}")
+        print(f"Available: {', '.join(SCENES.keys())}, all")
         sys.exit(1)
 
     print(f"\nBuilding scene: {scene_name}")
