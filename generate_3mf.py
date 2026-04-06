@@ -323,6 +323,8 @@ def write_3mf_multi(plates: dict, filename: str, palette=None):
         layout = _layout_pieces(pieces)
 
         for piece_name, mesh, tx, ty in layout:
+            # Bake position into vertices (transforms aren't reliable)
+            mesh.translate(tx, ty, 0)
             color_meshes = _split_mesh_by_color(mesh)
 
             # Sub-objects (volumes)
@@ -353,10 +355,7 @@ def write_3mf_multi(plates: dict, filename: str, palette=None):
       </components>
     </object>"""
 
-            # Position via transform on the build item (3x4 affine matrix)
-            # [1 0 0 tx  0 1 0 ty  0 0 1 0] = translate by (tx, ty, 0)
-            transform = f"{1} {0} {0} {0} {1} {0} {0} {0} {1} {tx:.4f} {ty:.4f} {0}"
-            build_items_xml += f'\n    <item objectid="{parent_id}" p:UUID="build-{parent_id}" transform="{transform}" />'
+            build_items_xml += f'\n    <item objectid="{parent_id}" p:UUID="build-{parent_id}" />'
 
             # Config: parent with per-volume extruder
             parts_xml = ""
@@ -787,11 +786,14 @@ def build_hook(color: int = 3) -> Mesh:
 
 
 def render_text_arched(text: str, radius: float, pixel_size: float = 1.0,
-                       depth: float = 1.5, color: int = 0,
-                       arc_degrees: float = 150) -> Mesh:
-    """Render text arched along a circular path. Centered at origin in XZ plane.
+                       height: float = 1.5, color: int = 0,
+                       arc_degrees: float = 150,
+                       z_base: float = 0.0) -> Mesh:
+    """Render text arched along a circular path in the XY plane.
 
     Text curves along the top of the circle (like a brewery logo).
+    Each pixel is a small box sitting on top of the sign at z=z_base,
+    extruded upward by height.
     """
     result = Mesh()
     chars = text.upper()
@@ -802,97 +804,82 @@ def render_text_arched(text: str, radius: float, pixel_size: float = 1.0,
     char_w = 5  # pixels wide
     char_h = 7  # pixels tall
 
-    # Angular span per character
     arc_rad = math.radians(arc_degrees)
     char_angular_width = arc_rad / max(n, 1)
 
-    # Start angle — centered at top (90 degrees)
+    # Start angle — centered at top of circle (90 degrees = +Y direction)
     start_angle = math.pi / 2 + arc_rad / 2 - char_angular_width / 2
 
     for ci, ch in enumerate(chars):
         glyph = PIXEL_FONT.get(ch, PIXEL_FONT.get(ch.upper(), PIXEL_FONT[' ']))
-        # Center angle for this character
         char_center_angle = start_angle - ci * char_angular_width
 
         for row_idx, row in enumerate(glyph):
             for col_idx, pixel in enumerate(row):
                 if pixel == '1':
-                    # Position within character (centered)
+                    # local_x = horizontal offset within character
                     local_x = (col_idx - char_w / 2) * pixel_size
-                    local_z = (char_h - 1 - row_idx - char_h / 2) * pixel_size
+                    # local_r = radial offset (top row = outermost)
+                    local_r = (char_h - 1 - row_idx - char_h / 2) * pixel_size
 
-                    # Angular offset for this pixel within the character
                     ang_offset = local_x / radius
                     ang = char_center_angle - ang_offset
+                    r = radius + local_r
 
-                    # Radial offset (text sits at radius + local_z)
-                    r = radius + local_z
-
-                    # Place pixel box
+                    # Position in XY plane
                     px = r * math.cos(ang)
-                    pz = r * math.sin(ang)
+                    py = r * math.sin(ang)
 
-                    b = box(pixel_size * 0.9, depth, pixel_size * 0.9, color=color)
-                    # Rotate box to face outward
-                    b.rotate_y(-math.degrees(ang) + 90)
-                    b.translate(px, 0, pz)
+                    # Box sits on the sign surface, extruded upward in Z
+                    b = box(pixel_size * 0.9, pixel_size * 0.9, height, color=color)
+                    # Rotate to align with the radial direction
+                    b.rotate_z(math.degrees(ang) - 90)
+                    b.translate(px, py, z_base)
                     result.merge(b)
 
     return result
 
 
-def build_owltopus_small(body_color: int = 1, eye_color: int = 3,
-                         tentacle_color: int = 0) -> Mesh:
-    """A small owl with octopus tentacles — sized for a ~20mm radius sign."""
-    # Compact owl body
-    body = sphere(3.5, rings=8, segments=12, color=body_color)
-    body.scale(1, 0.6, 1.1)
+def build_owltopus_flat(z_base: float = 3.0, body_color: int = 1,
+                        eye_color: int = 3, tentacle_color: int = 0) -> Mesh:
+    """A small flat owl-octopus relief sitting on top of the sign disc.
 
-    # Eyes
-    eye_l = sphere(1.3, rings=5, segments=8, color=eye_color)
-    eye_l.translate(-1.5, -2.5, 1.8)
-    pupil_l = sphere(0.6, rings=4, segments=6, color=2)
-    pupil_l.translate(-1.5, -3.3, 2)
+    Built in XY plane, extruded upward in Z from z_base.
+    """
+    h = 1.5  # extrusion height for the relief
 
-    eye_r = sphere(1.3, rings=5, segments=8, color=eye_color)
-    eye_r.translate(1.5, -2.5, 1.8)
-    pupil_r = sphere(0.6, rings=4, segments=6, color=2)
-    pupil_r.translate(1.5, -3.3, 2)
+    # Owl body — flattened disc
+    body = cylinder(4, h, segments=12, color=body_color)
+    body.translate(0, 0, z_base)
 
-    # Beak
-    beak = cone(0.8, 1.5, segments=6, color=eye_color)
-    beak.rotate_x(-90).translate(0, -3.5, 0.3)
+    # Eyes — small raised cylinders
+    eye_l = cylinder(1.3, h + 0.3, segments=8, color=eye_color)
+    eye_l.translate(-1.8, 1.5, z_base)
+    pupil_l = cylinder(0.6, h + 0.5, segments=6, color=2)
+    pupil_l.translate(-1.8, 1.5, z_base)
 
-    # Belly
-    belly = sphere(2.2, rings=5, segments=8, color=eye_color)
-    belly.scale(0.7, 0.3, 0.8).translate(0, -2.8, -0.5)
+    eye_r = cylinder(1.3, h + 0.3, segments=8, color=eye_color)
+    eye_r.translate(1.8, 1.5, z_base)
+    pupil_r = cylinder(0.6, h + 0.5, segments=6, color=2)
+    pupil_r.translate(1.8, 1.5, z_base)
 
-    # Tentacles — smaller, fewer segments
+    # Beak — small triangle (cone seen from above)
+    beak = cone(0.8, h + 0.2, segments=3, color=eye_color)
+    beak.translate(0, 0, z_base)
+
+    # Tentacles — small cylinders radiating outward in XY
     tentacles = Mesh()
+    for angle_deg in [-140, -160, -180, -200, -220, 40, 60, 80]:
+        ang = math.radians(angle_deg)
+        for i in range(4):
+            f = i / 4
+            r = 0.6 * (1 - f * 0.4)
+            t = cylinder(r, h * 0.8, segments=5, color=tentacle_color)
+            dist = 4.5 + i * 1.5
+            t.translate(dist * math.cos(ang), dist * math.sin(ang), z_base)
+            tentacles.merge(t)
 
-    def make_tentacle(sx, sz, curl, segs=6):
-        t = Mesh()
-        x, z, y = sx, sz, -0.5
-        for i in range(segs):
-            f = i / segs
-            r = 0.7 * (1 - f * 0.5)
-            s = sphere(r, rings=3, segments=5, color=tentacle_color)
-            s.translate(x, y, z)
-            t.merge(s)
-            x += curl * (0.6 + f * 0.3)
-            z += 0.2 - f * 0.8
-            y -= 0.15 * f
-        return t
-
-    tentacles.merge(make_tentacle(-0.5, 5, -0.8, 5))
-    tentacles.merge(make_tentacle(-2, 4.5, -1.0, 4))
-    tentacles.merge(make_tentacle(-3.5, 3, -0.6, 4))
-    tentacles.merge(make_tentacle(0.5, 5, 0.8, 5))
-    tentacles.merge(make_tentacle(2, 4.5, 1.0, 4))
-    tentacles.merge(make_tentacle(3.5, 3, 0.6, 4))
-
-    return merge_all(body, eye_l, pupil_l, eye_r, pupil_r, beak,
-                     belly, tentacles)
+    return merge_all(body, eye_l, pupil_l, eye_r, pupil_r, beak, tentacles)
 
 
 def scene_quarter_plot_sign() -> dict:
@@ -903,40 +890,36 @@ def scene_quarter_plot_sign() -> dict:
     AMS: 0=Red (tentacles), 1=Blue (owl), 2=Green (disc), 3=Yellow (border/text)
     """
     radius = 22
+    thickness = 3
     pieces = {}
 
     # Circular disc with border ring
-    disc = build_circular_sign(radius, thickness=3,
+    disc = build_circular_sign(radius, thickness=thickness,
                                border_width=1.5,
                                plate_color=2, border_color=3)
 
-    # Arched "QUARTER PLOT" around the top
-    text_top = render_text_arched("QUARTER", radius=radius - 5,
-                                  pixel_size=0.9, depth=1.5, color=3,
-                                  arc_degrees=130)
-    text_top.translate(0, -1.5, 0)
+    # Arched "QUARTER" around the top — flat on the disc in XY, raised in Z
+    text_top = render_text_arched("QUARTER", radius=radius - 6,
+                                  pixel_size=0.9, height=1.5, color=3,
+                                  arc_degrees=130, z_base=thickness)
 
-    # "PLOT" arched along the bottom (flipped arc)
-    text_bot = render_text_arched("PLOT", radius=radius - 5,
-                                  pixel_size=0.9, depth=1.5, color=3,
-                                  arc_degrees=-70)
-    text_bot.translate(0, -1.5, 0)
+    # "PLOT" arched along the bottom
+    text_bot = render_text_arched("PLOT", radius=radius - 6,
+                                  pixel_size=0.9, height=1.5, color=3,
+                                  arc_degrees=-70, z_base=thickness)
 
-    # Small owltopus in the center
-    owltopus = build_owltopus_small(body_color=1, eye_color=3, tentacle_color=0)
-    owltopus.translate(0, -2, 0)
+    # Flat owltopus relief in the center
+    owltopus = build_owltopus_flat(z_base=thickness, body_color=1,
+                                   eye_color=3, tentacle_color=0)
 
     sign = merge_all(disc, text_top, text_bot, owltopus)
-    # Lay flat — it's already flat (disc base at z=0)
     pieces["sign"] = sign
 
     # Two small hooks
     hook_l = build_hook(color=3)
-    hook_l.translate(-12, 0, 3)
     pieces["hook_left"] = hook_l
 
     hook_r = build_hook(color=3)
-    hook_r.translate(12, 0, 3)
     pieces["hook_right"] = hook_r
 
     return pieces
@@ -949,31 +932,33 @@ def scene_gnalort_sign() -> dict:
     AMS: 0=Red (border), 1=Blue (disc), 2=Green (bottle), 3=Yellow (text)
     """
     radius = 20
+    thickness = 3
     pieces = {}
 
-    disc = build_circular_sign(radius, thickness=3,
+    disc = build_circular_sign(radius, thickness=thickness,
                                border_width=1.5,
                                plate_color=1, border_color=0)
 
-    # Arched "GNALÖRT" across the top
-    text_top = render_text_arched("GNAL\u00d6RT", radius=radius - 4,
-                                  pixel_size=0.85, depth=1.5, color=3,
-                                  arc_degrees=130)
-    text_top.translate(0, -1.5, 0)
+    # Arched "GNALÖRT" across the top — flat on disc
+    text_top = render_text_arched("GNAL\u00d6RT", radius=radius - 5,
+                                  pixel_size=0.85, height=1.5, color=3,
+                                  arc_degrees=130, z_base=thickness)
 
-    # Small bottle in the center
-    bottle = build_bottle(body_color=2, cap_color=0, height_scale=0.5)
-    bottle.scale(0.6).rotate_x(90).translate(0, -2, -2)
+    # Small bottle relief in the center
+    bottle = cylinder(2.5, 1.5, segments=8, color=2)
+    bottle.translate(0, -2, thickness)
+    neck = cylinder(1.2, 1.5, segments=6, color=2)
+    neck.translate(0, 2, thickness)
+    cap = cylinder(1.4, 0.8, segments=6, color=0)
+    cap.translate(0, 3.5, thickness)
 
-    sign = merge_all(disc, text_top, bottle)
+    sign = merge_all(disc, text_top, bottle, neck, cap)
     pieces["sign"] = sign
 
     hook_l = build_hook(color=3)
-    hook_l.translate(-10, 0, 3)
     pieces["hook_left"] = hook_l
 
     hook_r = build_hook(color=3)
-    hook_r.translate(10, 0, 3)
     pieces["hook_right"] = hook_r
 
     return pieces
