@@ -650,6 +650,9 @@ PIXEL_FONT = {
     '-': ["00000","00000","00000","11111","00000","00000","00000"],
     '.': ["00000","00000","00000","00000","00000","00000","00100"],
     '/': ["00001","00010","00010","00100","01000","01000","10000"],
+    # Umlaut characters
+    '\u00d6': ["01010","00000","01110","10001","10001","10001","01110"],  # Ö
+    '\u00f6': ["01010","00000","01110","10001","10001","10001","01110"],  # ö
 }
 
 
@@ -689,147 +692,183 @@ def text_width(text: str, pixel_size: float = 1.5) -> float:
 # SIGN BUILDERS
 # ============================================================================
 
-def build_sign_plate(width: float, height: float, thickness: float = 3.0,
-                     border: float = 2.0, plate_color: int = 2,
-                     border_color: int = 3) -> Mesh:
-    """A sign plate with a contrasting border frame."""
-    # Main plate
-    plate = rounded_box(width, thickness, height, bevel=1.5, color=plate_color)
+def build_circular_sign(radius: float, thickness: float = 3.0,
+                        border_width: float = 2.0,
+                        plate_color: int = 2, border_color: int = 3,
+                        segments: int = 32) -> Mesh:
+    """A circular sign plate with a contrasting border ring."""
+    # Main disc
+    disc = cylinder(radius, thickness, segments=segments, color=plate_color)
 
-    # Border frame — 4 strips
-    top = box(width + 1, thickness + 0.5, border, color=border_color)
-    top.translate(0, 0, height - border / 2)
-    bottom = box(width + 1, thickness + 0.5, border, color=border_color)
-    bottom.translate(0, 0, border / 2)
-    left = box(border, thickness + 0.5, height + 1, color=border_color)
-    left.translate(-(width / 2 - border / 2), 0, height / 2)
-    right = box(border, thickness + 0.5, height + 1, color=border_color)
-    right.translate(width / 2 - border / 2, 0, height / 2)
+    # Border ring
+    ring = torus(radius, border_width, major_segs=segments,
+                 minor_segs=8, color=border_color)
+    ring.translate(0, 0, thickness / 2)
 
-    return merge_all(plate, top, bottom, left, right)
+    return merge_all(disc, ring)
 
 
 def build_hook(color: int = 3) -> Mesh:
     """A wall-mounting hook — cylinder peg with a flat back plate."""
-    # Back plate (flush against wall)
-    back = box(6, 1.5, 8, color=color)
-    # Peg sticking out
-    peg = cylinder(2, 6, segments=10, color=color)
-    peg.rotate_x(-90).translate(0, -1.5, 4)
-    # Hook tip (slight upturn to hold things)
-    tip = cylinder(2, 2.5, segments=10, color=color)
-    tip.rotate_x(-60).translate(0, -6.5, 2.5)
+    back = box(5, 1.5, 6, color=color)
+    peg = cylinder(1.5, 5, segments=8, color=color)
+    peg.rotate_x(-90).translate(0, -1.5, 3)
+    tip = cylinder(1.5, 2, segments=8, color=color)
+    tip.rotate_x(-60).translate(0, -5.5, 2)
     return merge_all(back, peg, tip)
 
 
-def build_owltopus(body_color: int = 1, eye_color: int = 3,
-                   tentacle_color: int = 0) -> Mesh:
-    """An owl with octopus tentacles for hair/ear-tufts."""
-    # Owl body — squat egg shape
-    body = sphere(6, rings=10, segments=16, color=body_color)
-    body.scale(1, 0.6, 1.2).translate(0, 0, 0)
+def render_text_arched(text: str, radius: float, pixel_size: float = 1.0,
+                       depth: float = 1.5, color: int = 0,
+                       arc_degrees: float = 150) -> Mesh:
+    """Render text arched along a circular path. Centered at origin in XZ plane.
 
-    # Big round eyes
-    eye_l = sphere(2.2, rings=6, segments=10, color=eye_color)
-    eye_l.translate(-2.5, -4, 3)
-    pupil_l = sphere(1.0, rings=5, segments=8, color=2)
-    pupil_l.translate(-2.5, -5.5, 3.2)
+    Text curves along the top of the circle (like a brewery logo).
+    """
+    result = Mesh()
+    chars = text.upper()
+    n = len(chars)
+    if n == 0:
+        return result
 
-    eye_r = sphere(2.2, rings=6, segments=10, color=eye_color)
-    eye_r.translate(2.5, -4, 3)
-    pupil_r = sphere(1.0, rings=5, segments=8, color=2)
-    pupil_r.translate(2.5, -5.5, 3.2)
+    char_w = 5  # pixels wide
+    char_h = 7  # pixels tall
+
+    # Angular span per character
+    arc_rad = math.radians(arc_degrees)
+    char_angular_width = arc_rad / max(n, 1)
+
+    # Start angle — centered at top (90 degrees)
+    start_angle = math.pi / 2 + arc_rad / 2 - char_angular_width / 2
+
+    for ci, ch in enumerate(chars):
+        glyph = PIXEL_FONT.get(ch, PIXEL_FONT.get(ch.upper(), PIXEL_FONT[' ']))
+        # Center angle for this character
+        char_center_angle = start_angle - ci * char_angular_width
+
+        for row_idx, row in enumerate(glyph):
+            for col_idx, pixel in enumerate(row):
+                if pixel == '1':
+                    # Position within character (centered)
+                    local_x = (col_idx - char_w / 2) * pixel_size
+                    local_z = (char_h - 1 - row_idx - char_h / 2) * pixel_size
+
+                    # Angular offset for this pixel within the character
+                    ang_offset = local_x / radius
+                    ang = char_center_angle - ang_offset
+
+                    # Radial offset (text sits at radius + local_z)
+                    r = radius + local_z
+
+                    # Place pixel box
+                    px = r * math.cos(ang)
+                    pz = r * math.sin(ang)
+
+                    b = box(pixel_size * 0.9, depth, pixel_size * 0.9, color=color)
+                    # Rotate box to face outward
+                    b.rotate_y(-math.degrees(ang) + 90)
+                    b.translate(px, 0, pz)
+                    result.merge(b)
+
+    return result
+
+
+def build_owltopus_small(body_color: int = 1, eye_color: int = 3,
+                         tentacle_color: int = 0) -> Mesh:
+    """A small owl with octopus tentacles — sized for a ~20mm radius sign."""
+    # Compact owl body
+    body = sphere(3.5, rings=8, segments=12, color=body_color)
+    body.scale(1, 0.6, 1.1)
+
+    # Eyes
+    eye_l = sphere(1.3, rings=5, segments=8, color=eye_color)
+    eye_l.translate(-1.5, -2.5, 1.8)
+    pupil_l = sphere(0.6, rings=4, segments=6, color=2)
+    pupil_l.translate(-1.5, -3.3, 2)
+
+    eye_r = sphere(1.3, rings=5, segments=8, color=eye_color)
+    eye_r.translate(1.5, -2.5, 1.8)
+    pupil_r = sphere(0.6, rings=4, segments=6, color=2)
+    pupil_r.translate(1.5, -3.3, 2)
 
     # Beak
-    beak = cone(1.5, 2.5, segments=8, color=eye_color)
-    beak.rotate_x(-90).translate(0, -5.5, 0.5)
+    beak = cone(0.8, 1.5, segments=6, color=eye_color)
+    beak.rotate_x(-90).translate(0, -3.5, 0.3)
 
-    # Owl feet — small bumps at bottom
-    foot_l = sphere(1.5, rings=4, segments=6, color=eye_color)
-    foot_l.translate(-3, -2, -7)
-    foot_r = sphere(1.5, rings=4, segments=6, color=eye_color)
-    foot_r.translate(3, -2, -7)
+    # Belly
+    belly = sphere(2.2, rings=5, segments=8, color=eye_color)
+    belly.scale(0.7, 0.3, 0.8).translate(0, -2.8, -0.5)
 
-    # Belly patch — lighter oval
-    belly = sphere(4, rings=6, segments=10, color=eye_color)
-    belly.scale(0.8, 0.3, 1.0).translate(0, -4.5, -1)
-
-    # --- TENTACLES (octopus hair!) ---
-    # Tentacles sprout from the top of the head, curling outward
+    # Tentacles — smaller, fewer segments
     tentacles = Mesh()
 
-    def make_tentacle(start_x, start_z, curl_dir, length=8, segs=10):
-        """A curling tentacle made of chained small spheres."""
+    def make_tentacle(sx, sz, curl, segs=6):
         t = Mesh()
-        x, z = start_x, start_z
-        y = -1.0
+        x, z, y = sx, sz, -0.5
         for i in range(segs):
-            frac = i / segs
-            r = 1.3 * (1 - frac * 0.6)  # taper
-            s = sphere(r, rings=4, segments=6, color=tentacle_color)
+            f = i / segs
+            r = 0.7 * (1 - f * 0.5)
+            s = sphere(r, rings=3, segments=5, color=tentacle_color)
             s.translate(x, y, z)
             t.merge(s)
-            # Curl outward and down
-            x += curl_dir * (1.0 + frac * 0.5)
-            z += 0.3 - frac * 1.2  # up then down
-            y -= 0.3 * frac
+            x += curl * (0.6 + f * 0.3)
+            z += 0.2 - f * 0.8
+            y -= 0.15 * f
         return t
 
-    # 3 tentacles on each side, 2 on top
-    tentacles.merge(make_tentacle(-1, 8, -1, length=9))    # left back
-    tentacles.merge(make_tentacle(-3, 7, -1.2, length=7))  # left side
-    tentacles.merge(make_tentacle(-5, 5, -0.8, length=6))  # left low
-    tentacles.merge(make_tentacle(1, 8, 1, length=9))      # right back
-    tentacles.merge(make_tentacle(3, 7, 1.2, length=7))    # right side
-    tentacles.merge(make_tentacle(5, 5, 0.8, length=6))    # right low
-    tentacles.merge(make_tentacle(-1.5, 9, -0.3, length=5))  # top left
-    tentacles.merge(make_tentacle(1.5, 9, 0.3, length=5))    # top right
+    tentacles.merge(make_tentacle(-0.5, 5, -0.8, 5))
+    tentacles.merge(make_tentacle(-2, 4.5, -1.0, 4))
+    tentacles.merge(make_tentacle(-3.5, 3, -0.6, 4))
+    tentacles.merge(make_tentacle(0.5, 5, 0.8, 5))
+    tentacles.merge(make_tentacle(2, 4.5, 1.0, 4))
+    tentacles.merge(make_tentacle(3.5, 3, 0.6, 4))
 
     return merge_all(body, eye_l, pupil_l, eye_r, pupil_r, beak,
-                     foot_l, foot_r, belly, tentacles)
+                     belly, tentacles)
 
 
 def scene_quarter_plot_sign() -> dict:
     """
-    'Quarter Plot' bar sign — riff on Half Acre, with an owltopus.
+    Small circular 'Quarter Plot' sign with arched text and owltopus.
+    ~45mm diameter. Prints flat on the bed.
 
-    AMS color mapping:
-      0 = Red    (tentacles, accents)
-      1 = Blue   (owl body, sign plate)
-      2 = Green  (pupils, sign background)
-      3 = Yellow (border, eyes, hooks, text)
+    AMS: 0=Red (tentacles), 1=Blue (owl), 2=Green (disc), 3=Yellow (border/text)
     """
-    sign_w, sign_h = 70, 50
+    radius = 22
     pieces = {}
 
-    # Sign plate
-    plate = build_sign_plate(sign_w, sign_h, thickness=3,
-                             plate_color=2, border_color=3)
+    # Circular disc with border ring
+    disc = build_circular_sign(radius, thickness=3,
+                               border_width=1.5,
+                               plate_color=2, border_color=3)
 
-    # "QUARTER PLOT" text — two lines
-    line1 = render_text("QUARTER", pixel_size=1.8, depth=1.5, color=3)
-    w1 = text_width("QUARTER", 1.8)
-    line1.translate(-w1 / 2, -1.5, sign_h - 14)
+    # Arched "QUARTER PLOT" around the top
+    text_top = render_text_arched("QUARTER", radius=radius - 5,
+                                  pixel_size=0.9, depth=1.5, color=3,
+                                  arc_degrees=130)
+    text_top.translate(0, -1.5, 0)
 
-    line2 = render_text("PLOT", pixel_size=1.8, depth=1.5, color=3)
-    w2 = text_width("PLOT", 1.8)
-    line2.translate(-w2 / 2, -1.5, 4)
+    # "PLOT" arched along the bottom (flipped arc)
+    text_bot = render_text_arched("PLOT", radius=radius - 5,
+                                  pixel_size=0.9, depth=1.5, color=3,
+                                  arc_degrees=-70)
+    text_bot.translate(0, -1.5, 0)
 
-    # Owltopus mascot — centered between text lines
-    owltopus = build_owltopus(body_color=1, eye_color=3, tentacle_color=0)
-    owltopus.scale(1.1).translate(0, -2.5, sign_h / 2 - 2)
+    # Small owltopus in the center
+    owltopus = build_owltopus_small(body_color=1, eye_color=3, tentacle_color=0)
+    owltopus.translate(0, -2, 0)
 
-    sign = merge_all(plate, line1, line2, owltopus)
-    sign.place_on_ground()
+    sign = merge_all(disc, text_top, text_bot, owltopus)
+    # Lay flat — it's already flat (disc base at z=0)
     pieces["sign"] = sign
 
-    # Wall hooks (2)
+    # Two small hooks
     hook_l = build_hook(color=3)
-    hook_l.translate(-sign_w / 2 + 10, 0, sign_h + 5)
+    hook_l.translate(-12, 0, 3)
     pieces["hook_left"] = hook_l
 
     hook_r = build_hook(color=3)
-    hook_r.translate(sign_w / 2 - 10, 0, sign_h + 5)
+    hook_r.translate(12, 0, 3)
     pieces["hook_right"] = hook_r
 
     return pieces
@@ -837,46 +876,36 @@ def scene_quarter_plot_sign() -> dict:
 
 def scene_gnalort_sign() -> dict:
     """
-    'Gnalort?' bar sign — gnome Malort.
+    Small circular 'Gnalört' sign. ~40mm diameter.
 
-    AMS color mapping:
-      0 = Red    (border, exclamation)
-      1 = Blue   (sign plate)
-      2 = Green  (accents, bottle)
-      3 = Yellow (text, hooks)
+    AMS: 0=Red (border), 1=Blue (disc), 2=Green (bottle), 3=Yellow (text)
     """
-    sign_w, sign_h = 60, 35
+    radius = 20
     pieces = {}
 
-    # Sign plate — blue with red border (bold!)
-    plate = build_sign_plate(sign_w, sign_h, thickness=3,
-                             plate_color=1, border_color=0)
+    disc = build_circular_sign(radius, thickness=3,
+                               border_width=1.5,
+                               plate_color=1, border_color=0)
 
-    # "GNALORT?" text — single big line
-    line1 = render_text("GNALORT?", pixel_size=1.8, depth=1.5, color=3)
-    w1 = text_width("GNALORT?", 1.8)
-    line1.translate(-w1 / 2, -1.5, sign_h / 2 + 4)
+    # Arched "GNALÖRT" across the top
+    text_top = render_text_arched("GNAL\u00d6RT", radius=radius - 4,
+                                  pixel_size=0.85, depth=1.5, color=3,
+                                  arc_degrees=130)
+    text_top.translate(0, -1.5, 0)
 
-    # Subtitle
-    line2 = render_text("FOR GNOMES", pixel_size=1.0, depth=1.2, color=3)
-    w2 = text_width("FOR GNOMES", 1.0)
-    line2.translate(-w2 / 2, -1.5, 5)
+    # Small bottle in the center
+    bottle = build_bottle(body_color=2, cap_color=0, height_scale=0.5)
+    bottle.scale(0.6).rotate_x(90).translate(0, -2, -2)
 
-    # A tiny bottle silhouette in the middle
-    bottle = build_bottle(body_color=2, cap_color=0, height_scale=0.7)
-    bottle.scale(0.8).translate(0, -2.5, sign_h / 2 - 8)
-
-    sign = merge_all(plate, line1, line2, bottle)
-    sign.place_on_ground()
+    sign = merge_all(disc, text_top, bottle)
     pieces["sign"] = sign
 
-    # Wall hooks
     hook_l = build_hook(color=3)
-    hook_l.translate(-sign_w / 2 + 8, 0, sign_h + 5)
+    hook_l.translate(-10, 0, 3)
     pieces["hook_left"] = hook_l
 
     hook_r = build_hook(color=3)
-    hook_r.translate(sign_w / 2 - 8, 0, sign_h + 5)
+    hook_r.translate(10, 0, 3)
     pieces["hook_right"] = hook_r
 
     return pieces
