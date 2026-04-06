@@ -61,18 +61,26 @@ def write_3mf(mesh: Mesh, filename: str, palette=None):
         for t in triangles
     )
 
+    title = os.path.splitext(filename)[0]
+
     model_xml = f"""\
 <?xml version="1.0" encoding="UTF-8"?>
 <model unit="millimeter"
        xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
-       xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02">
-  <metadata name="Application">BambuLab3MFGenerator</metadata>
-  <metadata name="Title">{os.path.splitext(filename)[0]}</metadata>
+       xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02"
+       xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06"
+       xmlns:slic3rpe="http://schemas.slic3r.org/3mf/2017/06"
+       xmlns:BambuStudio="http://schemas.bambulab.com/package/2021">
+  <metadata name="Application">BambuStudio</metadata>
+  <metadata name="BambuStudio:3mfVersion">1</metadata>
+  <metadata name="slic3rpe:Version3mf">1</metadata>
+  <metadata name="Title">{title}</metadata>
+  <metadata name="Designer">3MF Generator</metadata>
   <resources>
     <basematerials id="1">
 {mat_lines}
     </basematerials>
-    <object id="2" type="model">
+    <object id="2" type="model" p:UUID="object-1">
       <mesh>
         <vertices>
 {vert_xml}
@@ -84,9 +92,42 @@ def write_3mf(mesh: Mesh, filename: str, palette=None):
     </object>
   </resources>
   <build>
-    <item objectid="2" />
+    <item objectid="2" p:UUID="build-item-1" />
   </build>
 </model>
+"""
+
+    # Build per-object config that maps materials to AMS filament extruders
+    # and sets basic print settings Bambu Studio expects
+    filament_configs = ""
+    for idx in range(len(palette)):
+        filament_configs += f"""
+    <filament id="{idx + 1}" name="{palette[idx][1]}" color="#{palette[idx][0]}" type="PLA" />"""
+
+    model_settings = f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <object id="2">
+    <metadata key="name" value="{title}" />
+    <metadata key="extruder" value="1" />
+  </object>
+  <plate>
+    <metadata key="plater_id" value="1" />
+    <metadata key="plater_name" value="" />
+    <metadata key="locked" value="false" />
+    <instance object_id="2" instance_id="0" />
+  </plate>
+</config>
+"""
+
+    # Filament/printer/print settings that Bambu Studio looks for
+    project_settings = f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <header>
+    <printer>Bambu Lab A1 0.4 nozzle</printer>
+  </header>{filament_configs}
+</config>
 """
 
     content_types = """\
@@ -94,6 +135,7 @@ def write_3mf(mesh: Mesh, filename: str, palette=None):
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml" />
   <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml" />
+  <Default Extension="config" ContentType="text/xml" />
 </Types>
 """
     rels = """\
@@ -109,6 +151,8 @@ def write_3mf(mesh: Mesh, filename: str, palette=None):
         zf.writestr("[Content_Types].xml", content_types)
         zf.writestr("_rels/.rels", rels)
         zf.writestr("3D/3dmodel.model", model_xml)
+        zf.writestr("Metadata/model_settings.config", model_settings)
+        zf.writestr("Metadata/project_settings.config", project_settings)
 
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
     os.makedirs(output_dir, exist_ok=True)
