@@ -226,9 +226,12 @@ def write_3mf(mesh: Mesh, filename: str, palette=None):
     <metadata key="plater_id" value="1" />
     <metadata key="plater_name" value="" />
     <metadata key="locked" value="false" />
+    <metadata key="bed_type" value="auto" />
+    <metadata key="print_sequence" value="by layer" />
     <model_instance>
       <metadata key="object_id" value="{parent_id}" />
       <metadata key="instance_id" value="0" />
+      <metadata key="identify_id" value="{parent_id}" />
     </model_instance>
   </plate>
 </config>
@@ -377,13 +380,16 @@ def write_3mf_multi(plates: dict, filename: str, palette=None):
     <model_instance>
       <metadata key="object_id" value="{parent_id}" />
       <metadata key="instance_id" value="0" />
+      <metadata key="identify_id" value="{parent_id}" />
     </model_instance>"""
 
         plate_configs += f"""
   <plate>
     <metadata key="plater_id" value="{plate_idx}" />
     <metadata key="plater_name" value="{plate_name}" />
-    <metadata key="locked" value="false" />{plate_instances}
+    <metadata key="locked" value="false" />
+    <metadata key="bed_type" value="auto" />
+    <metadata key="print_sequence" value="by layer" />{plate_instances}
   </plate>"""
 
     model_xml = f"""\
