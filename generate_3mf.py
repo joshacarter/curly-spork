@@ -237,30 +237,53 @@ def build_beer_mug(color: int = 3) -> Mesh:
     return merge_all(body, foam, handle)
 
 
-def build_bottle(color: int = 2) -> Mesh:
-    """A small bottle — for behind the bar."""
-    body = truncated_cone(3, 3, 10, segments=12, color=color)
-    neck = truncated_cone(1.8, 1.5, 5, segments=10, color=color)
-    neck.translate(0, 0, 10)
-    cap = cylinder(1.8, 1.5, segments=10, color=0)
-    cap.translate(0, 0, 15)
-    return merge_all(body, neck, cap)
+def build_bottle(body_color: int = 2, cap_color: int = 0,
+                 height_scale: float = 1.0) -> Mesh:
+    """A small bottle — body and cap in separate AMS colors."""
+    h = 10 * height_scale
+    body = truncated_cone(3, 2.8, h, segments=12, color=body_color)
+    neck = truncated_cone(1.8, 1.5, 5, segments=10, color=body_color)
+    neck.translate(0, 0, h)
+    cap = cylinder(1.8, 1.5, segments=10, color=cap_color)
+    cap.translate(0, 0, h + 5)
+    label = truncated_cone(3.05, 2.85, h * 0.4, segments=12, color=cap_color)
+    label.translate(0, 0, h * 0.3)
+    return merge_all(body, neck, cap, label)
 
 
-def build_shelf() -> Mesh:
-    """A back-bar shelf for bottles."""
-    # Back wall
-    wall = box(100, 3, 40, color=2)
+def build_back_wall() -> Mesh:
+    """A colorful back-bar wall with two shelves and decorative trim."""
+    # Back wall panel
+    wall = box(110, 3, 50, color=2)
     wall.translate(0, 16, 0)
 
-    # Shelves
-    shelf1 = box(96, 10, 1.5, color=2)
+    # Accent strip along top of wall
+    trim_top = box(110, 3.5, 3, color=3)
+    trim_top.translate(0, 16, 50)
+
+    # Accent strip along bottom
+    trim_bot = box(110, 3.5, 2, color=3)
+    trim_bot.translate(0, 16, 0)
+
+    # Lower shelf
+    shelf1 = box(104, 12, 2, color=3)
     shelf1.translate(0, 12, 15)
+    # Shelf bracket left
+    bk1l = box(2, 10, 2, color=0)
+    bk1l.translate(-48, 12, 13)
+    bk1r = box(2, 10, 2, color=0)
+    bk1r.translate(48, 12, 13)
 
-    shelf2 = box(96, 10, 1.5, color=2)
-    shelf2.translate(0, 12, 30)
+    # Upper shelf
+    shelf2 = box(104, 12, 2, color=3)
+    shelf2.translate(0, 12, 32)
+    bk2l = box(2, 10, 2, color=0)
+    bk2l.translate(-48, 12, 30)
+    bk2r = box(2, 10, 2, color=0)
+    bk2r.translate(48, 12, 30)
 
-    return merge_all(wall, shelf1, shelf2)
+    return merge_all(wall, trim_top, trim_bot,
+                     shelf1, bk1l, bk1r, shelf2, bk2l, bk2r)
 
 
 # ============================================================================
@@ -269,65 +292,74 @@ def build_shelf() -> Mesh:
 
 def scene_gnome_bar() -> dict:
     """
-    A bar scene with gnomes for a garden.
+    A garden gnome bar — furniture only, place your own gnomes!
+
+    Includes: bar counter, 4 colorful stools, back wall with shelves,
+    colorful bottles in all 4 AMS colors, beer mugs, base plate.
 
     AMS color mapping:
-      0 = Red    (gnome hats, accents)
-      1 = Blue   (gnome coats)
-      2 = Green  (bar/furniture — wood)
-      3 = Yellow (skin, brass, beer)
+      0 = Red    (bottle accents, stool seats, brackets)
+      1 = Blue   (stool seats, bottle bodies)
+      2 = Green  (bar counter, wall, wood tones)
+      3 = Yellow (brass rail, shelves, trim, mugs)
     """
     pieces = {}
 
-    # --- Bar counter (centered) ---
+    # --- Bar counter ---
     bar = build_bar_counter()
     pieces["bar_counter"] = bar
 
-    # --- Back shelf with bottles ---
-    shelf = build_shelf()
-    shelf.translate(0, 5, 0)  # behind bar
-    bottles_on_shelf = Mesh()
-    for i, xpos in enumerate([-36, -24, -12, 0, 12, 24, 36]):
-        b = build_bottle(color=2 if i % 2 == 0 else 0)
-        b.translate(xpos, 14, 16.5)
-        bottles_on_shelf.merge(b)
-    pieces["back_shelf"] = merge_all(shelf, bottles_on_shelf)
+    # --- Back wall with shelves ---
+    wall = build_back_wall()
+    wall.translate(0, 5, 0)
 
-    # --- Bar stools ---
+    # --- Colorful bottles on shelves (cycling all 4 AMS colors) ---
+    bottle_colors = [
+        # (body_color, cap_color, height_scale)
+        (0, 3, 1.0),   # red body, yellow cap
+        (1, 0, 0.85),  # blue body, red cap
+        (2, 3, 1.1),   # green body, yellow cap
+        (0, 1, 0.9),   # red body, blue cap
+        (1, 3, 1.0),   # blue body, yellow cap
+        (2, 0, 0.95),  # green body, red cap
+        (3, 0, 1.05),  # yellow body, red cap
+        (1, 2, 0.85),  # blue body, green cap
+        (0, 2, 1.0),   # red body, green cap
+    ]
+
+    bottles = Mesh()
+    # Lower shelf bottles
+    for i, xpos in enumerate([-40, -28, -16, -4, 8, 20, 32, 44]):
+        bc, cc, hs = bottle_colors[i % len(bottle_colors)]
+        b = build_bottle(body_color=bc, cap_color=cc, height_scale=hs)
+        b.translate(xpos, 14, 17)
+        bottles.merge(b)
+
+    # Upper shelf bottles
+    for i, xpos in enumerate([-36, -20, -4, 12, 28, 40]):
+        bc, cc, hs = bottle_colors[(i + 3) % len(bottle_colors)]
+        b = build_bottle(body_color=bc, cap_color=cc, height_scale=hs)
+        b.translate(xpos, 14, 34)
+        bottles.merge(b)
+
+    pieces["back_wall_with_bottles"] = merge_all(wall, bottles)
+
+    # --- 4 colorful stools (alternating seat colors) ---
+    stool_seat_colors = [0, 1, 0, 1]  # red, blue, red, blue seats
     for i, xpos in enumerate([-32, -12, 12, 32]):
-        stool = build_bar_stool(color=2)
+        stool = build_bar_stool(color=stool_seat_colors[i])
         stool.translate(xpos, -20, 0)
         pieces[f"stool_{i+1}"] = stool
 
-    # --- Gnomes sitting at the bar ---
-    # Gnome 1 — at stool 1, facing bar
-    g1 = build_gnome(hat_color=0, body_color=1, skin_color=3, facing=0)
-    g1.translate(-32, -20, 22)
-    pieces["gnome_patron_1"] = g1
-
-    # Gnome 2 — at stool 2
-    g2 = build_gnome(hat_color=0, body_color=1, skin_color=3, facing=15)
-    g2.translate(-12, -20, 22)
-    pieces["gnome_patron_2"] = g2
-
-    # Gnome 3 — at stool 4, leaning in
-    g3 = build_gnome(hat_color=0, body_color=1, skin_color=3, facing=-10)
-    g3.translate(32, -20, 22)
-    pieces["gnome_patron_3"] = g3
-
-    # --- Bartender gnome (behind bar) ---
-    bartender = build_gnome(hat_color=0, body_color=2, skin_color=3, facing=180)
-    bartender.translate(0, 8, 0)
-    pieces["gnome_bartender"] = bartender
-
     # --- Beer mugs on bar top ---
+    mug_colors = [3, 0, 3, 1]  # yellow, red, yellow, blue
     for i, xpos in enumerate([-30, -10, 14, 34]):
-        mug = build_beer_mug(color=3)
+        mug = build_beer_mug(color=mug_colors[i])
         mug.translate(xpos, -4, 33)
         pieces[f"mug_{i+1}"] = mug
 
-    # --- Base plate (optional — helps adhesion) ---
-    base = rounded_box(130, 60, 1.5, bevel=3, color=2)
+    # --- Base plate ---
+    base = rounded_box(140, 60, 1.5, bevel=3, color=2)
     base.translate(0, -5, 0)
     pieces["base_plate"] = base
 
@@ -349,7 +381,7 @@ def scene_single_gnome() -> dict:
 SCENES = {
     "gnome_bar_scene": {
         "fn": scene_gnome_bar,
-        "desc": "A bar scene with gnomes for a garden (4 colors)",
+        "desc": "Garden bar furniture — stools, back wall, colorful bottles (4 colors)",
     },
     "single_gnome": {
         "fn": scene_single_gnome,
