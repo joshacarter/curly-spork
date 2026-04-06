@@ -13,6 +13,7 @@ Usage:
     python3 generate_3mf.py gnome_bar_scene --split   # one 3mf per piece
 """
 
+import json
 import math
 import os
 import sys
@@ -113,20 +114,24 @@ def _bambu_3mf_package(model_xml: str, model_settings: str,
     return filepath
 
 
-def _project_settings_xml(palette):
-    """Generate Bambu Studio project settings config."""
-    filament_configs = ""
-    for idx, (hexc, name) in enumerate(palette):
-        filament_configs += f"""
-  <filament id="{idx + 1}" name="{name}" color="#{hexc}" type="PLA" />"""
-    return f"""\
-<?xml version="1.0" encoding="UTF-8"?>
-<config>
-  <header>
-    <printer>Bambu Lab A1 0.4 nozzle</printer>
-  </header>{filament_configs}
-</config>
-"""
+def _project_settings_json(palette):
+    """Generate Bambu Studio project settings as JSON.
+
+    BambuStudio loads this via DynamicPrintConfig::load_from_json —
+    it MUST be valid JSON, not XML, or config_loaded will be empty
+    and the file gets treated as geometry-only.
+    """
+    filament_colours = [f"#{hexc}" for hexc, _ in palette]
+    filament_types = ["PLA"] * len(palette)
+    config = {
+        "printer_settings_id": "Bambu Lab A1 0.4 nozzle",
+        "filament_colour": filament_colours,
+        "filament_type": filament_types,
+        "filament_settings_id": [f"Bambu PLA Basic @BBL A1" for _ in palette],
+        "print_settings_id": "0.20mm Standard @BBL A1",
+        "nozzle_diameter": ["0.4"],
+    }
+    return json.dumps(config, indent=2)
 
 
 def write_3mf(mesh: Mesh, filename: str, palette=None):
@@ -183,7 +188,7 @@ def write_3mf(mesh: Mesh, filename: str, palette=None):
        xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06"
        xmlns:slic3rpe="http://schemas.slic3r.org/3mf/2017/06"
        xmlns:BambuStudio="http://schemas.bambulab.com/package/2021">
-  <metadata name="Application">BambuStudio</metadata>
+  <metadata name="Application">BambuStudio-01.10.00.00</metadata>
   <metadata name="BambuStudio:3mfVersion">1</metadata>
   <metadata name="slic3rpe:Version3mf">1</metadata>
   <metadata name="Title">{title}</metadata>
@@ -202,7 +207,7 @@ def write_3mf(mesh: Mesh, filename: str, palette=None):
         cname = palette[color][1] if color < len(palette) else f"Color{color}"
         extruder = color + 1  # AMS slots are 1-indexed
         parts_xml += f"""
-    <part id="{vid}" subtype="normal_part">
+    <part id="{vid}" subtype="ModelPart">
       <metadata key="name" value="{cname}" />
       <metadata key="extruder" value="{extruder}" />
     </part>"""
@@ -218,13 +223,16 @@ def write_3mf(mesh: Mesh, filename: str, palette=None):
     <metadata key="plater_id" value="1" />
     <metadata key="plater_name" value="" />
     <metadata key="locked" value="false" />
-    <instance object_id="{parent_id}" instance_id="0" />
+    <model_instance>
+      <metadata key="object_id" value="{parent_id}" />
+      <metadata key="instance_id" value="0" />
+    </model_instance>
   </plate>
 </config>
 """
 
     filepath = _bambu_3mf_package(
-        model_xml, model_settings, _project_settings_xml(palette),
+        model_xml, model_settings, _project_settings_json(palette),
         filename, palette)
 
     used = sorted(color_meshes.keys())
@@ -289,7 +297,7 @@ def write_3mf_multi(pieces_by_plate: dict, filename: str, palette=None):
         for color, vid in volume_ids.items():
             cname = palette[color][1] if color < len(palette) else f"Color{color}"
             parts_xml += f"""
-    <part id="{vid}" subtype="normal_part">
+    <part id="{vid}" subtype="ModelPart">
       <metadata key="name" value="{cname}" />
       <metadata key="extruder" value="{color + 1}" />
     </part>"""
@@ -300,7 +308,11 @@ def write_3mf_multi(pieces_by_plate: dict, filename: str, palette=None):
     <metadata key="extruder" value="1" />{parts_xml}
   </object>"""
 
-        plate_instances += f'\n    <instance object_id="{parent_id}" instance_id="0" />'
+        plate_instances += f"""
+    <model_instance>
+      <metadata key="object_id" value="{parent_id}" />
+      <metadata key="instance_id" value="0" />
+    </model_instance>"""
 
     model_xml = f"""\
 <?xml version="1.0" encoding="UTF-8"?>
@@ -309,7 +321,7 @@ def write_3mf_multi(pieces_by_plate: dict, filename: str, palette=None):
        xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06"
        xmlns:slic3rpe="http://schemas.slic3r.org/3mf/2017/06"
        xmlns:BambuStudio="http://schemas.bambulab.com/package/2021">
-  <metadata name="Application">BambuStudio</metadata>
+  <metadata name="Application">BambuStudio-01.10.00.00</metadata>
   <metadata name="BambuStudio:3mfVersion">1</metadata>
   <metadata name="slic3rpe:Version3mf">1</metadata>
   <metadata name="Title">{title}</metadata>
@@ -333,7 +345,7 @@ def write_3mf_multi(pieces_by_plate: dict, filename: str, palette=None):
 """
 
     filepath = _bambu_3mf_package(
-        model_xml, model_settings, _project_settings_xml(palette),
+        model_xml, model_settings, _project_settings_json(palette),
         filename, palette)
 
     total_pieces = len(pieces_by_plate)
